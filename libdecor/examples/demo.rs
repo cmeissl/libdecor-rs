@@ -1,28 +1,43 @@
 use std::{
     cell::RefCell,
-    io::{BufWriter, Write},
-    os::unix::prelude::AsRawFd,
+    fs::File,
+    io::{BufWriter, Read, Write},
+    os::unix::prelude::{AsRawFd, FromRawFd},
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 
-use libdecor::Context;
+use libdecor::{Capabilities, Context, Frame, State, WindowState};
 use wayland_client::{
-    protocol::{
-        wl_compositor,
-        wl_keyboard::{self},
-        wl_pointer::{self, ButtonState},
-        wl_seat::{self, Capability},
-        wl_shm, wl_surface,
-    },
-    Display, GlobalManager, Main,
+    protocol::{wl_compositor, wl_keyboard, wl_pointer, wl_seat, wl_shm, wl_surface},
+    Attached, Display, GlobalManager, Main,
 };
 use wayland_cursor::CursorTheme;
+use wayland_protocols::xdg_shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
+use xkbcommon::xkb;
 
 const CHK: i32 = 16;
 const DEFAULT_WIDTH: i32 = 30 * CHK;
 const DEFAULT_HEIGHT: i32 = 20 * CHK;
+const POPUP_WIDTH: i32 = 100;
+const POPUP_HEIGHT: i32 = 300;
+
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
+
+static TITLES: &'static [&'static str] = &[
+    "Hello!",
+    "Hallå!",
+    "Привет!",
+    "Γειά σου!",
+    "שלום!",
+    "你好！",
+    "สวัสดี!",
+    "こんにちは！",
+    "👻❤️🤖➕🍰",
+];
 
 fn redraw(
     shm: &wl_shm::WlShm,
@@ -31,10 +46,8 @@ fn redraw(
     height: i32,
     window_state: Option<libdecor::WindowState>,
 ) {
-    // create a tempfile to write the contents of the window on
     let mut tmp = tempfile::tempfile().expect("Unable to create a tempfile.");
 
-    // write the contents to it
     {
         let is_active = window_state
             .map(|s| s.contains(libdecor::WindowState::ACTIVE))
@@ -80,6 +93,112 @@ fn redraw(
     surface.commit();
 }
 
+fn popup_configure(
+    shm: &wl_shm::WlShm,
+    surface: &wl_surface::WlSurface,
+    xdg_surface: &xdg_surface::XdgSurface,
+    width: i32,
+    height: i32,
+    serial: u32,
+) {
+    let mut tmp = tempfile::tempfile().expect("Unable to create a tempfile.");
+
+    {
+        let color: u32 = 0xff4455ff;
+
+        let mut buf = BufWriter::new(&mut tmp);
+        for _ in 0..(width * height) {
+            buf.write_all(&color.to_ne_bytes()).unwrap();
+        }
+        buf.flush().unwrap();
+    }
+
+    let pool = shm.create_pool(tmp.as_raw_fd(), (width * height * 4) as i32);
+    let buffer = pool.create_buffer(
+        0,
+        width as i32,
+        height as i32,
+        (width * 4) as i32,
+        wl_shm::Format::Argb8888,
+    );
+
+    buffer.quick_assign(|_, _, _| {});
+
+    surface.attach(Some(&buffer), 0, 0);
+    surface.set_buffer_scale(1);
+    surface.damage_buffer(0, 0, width, height);
+    xdg_surface.ack_configure(serial);
+    surface.commit();
+}
+
+struct Popup {
+    surface: wl_surface::WlSurface,
+    xdg_surface: xdg_surface::XdgSurface,
+    xdg_popup: xdg_popup::XdgPopup,
+}
+
+impl Popup {
+    fn destroy(self) {
+        self.xdg_popup.destroy();
+        self.xdg_surface.destroy();
+        self.surface.destroy();
+    }
+}
+
+fn resize(
+    frame: &Frame,
+    shm: &wl_shm::WlShm,
+    surface: &wl_surface::WlSurface,
+    width: i32,
+    height: i32,
+    window_state: Option<libdecor::WindowState>,
+    floating_size: &mut (i32, i32),
+    configured_size: &mut (i32, i32),
+) {
+    if height <= 0 || width <= 0 {
+        eprintln!("... ignoring resize to 0");
+        return;
+    }
+
+    if !frame.is_floating() {
+        eprintln!("... ignoring in non-floating mode");
+        return;
+    }
+
+    let state = State::new(width, height);
+    frame.commit(&state, None);
+
+    *floating_size = (width, height);
+    *configured_size = (width, height);
+
+    redraw(&shm, &surface, width, height, window_state);
+}
+
+fn get_cursor_surface(
+    compositor: &wl_compositor::WlCompositor,
+    shm: &Attached<wl_shm::WlShm>,
+) -> wl_surface::WlSurface {
+    let mut cursor_theme = CursorTheme::load(24, shm);
+    let cursor = cursor_theme
+        .get_cursor("left_ptr")
+        .expect("Cursor not provided by theme");
+    let cursor_buffer = &cursor[0];
+    let cursor_surface = compositor.create_surface();
+    let cursor_buffer_dimension = cursor_buffer.dimensions();
+    cursor_surface.quick_assign(|_, _, _| {});
+
+    cursor_surface.attach(Some(cursor_buffer), 0, 0);
+    cursor_surface.set_buffer_scale(1);
+    cursor_surface.damage_buffer(
+        0,
+        0,
+        cursor_buffer_dimension.0 as i32,
+        cursor_buffer_dimension.1 as i32,
+    );
+    cursor_surface.commit();
+    cursor_surface.detach()
+}
+
 fn main() {
     let display = Display::connect_to_env().unwrap();
     let mut event_queue = display.create_event_queue();
@@ -93,26 +212,25 @@ fn main() {
         .instantiate_exact::<wl_compositor::WlCompositor>(4)
         .unwrap();
 
-    compositor.quick_assign(|_, _request, _| todo!());
+    let xdg_wm_base = globals
+        .instantiate_exact::<xdg_wm_base::XdgWmBase>(1)
+        .expect("Missing xdg_wm_base");
 
     let content_surface = compositor.create_surface();
 
-    content_surface.quick_assign(|_, request, _| match request {
-        wl_surface::Event::Enter { .. } => {}
-        wl_surface::Event::Leave { .. } => {}
-        _ => unreachable!(),
-    });
+    content_surface.quick_assign(|_, _, _| {});
 
     let shm = Rc::new(globals.instantiate_exact::<wl_shm::WlShm>(1).unwrap());
 
-    shm.quick_assign(|_, request, _| match request {
-        wl_shm::Event::Format { .. } => {}
-        _ => unreachable!(),
-    });
+    shm.quick_assign(|_, _, _| {});
 
     let exit = Rc::new(AtomicBool::new(false));
 
-    let (mut floating_width, mut floating_height) = (DEFAULT_WIDTH, DEFAULT_HEIGHT);
+    let floating_size: Rc<RefCell<(i32, i32)>> =
+        Rc::new(RefCell::new((DEFAULT_WIDTH, DEFAULT_HEIGHT)));
+    let configured_size: Rc<RefCell<(i32, i32)>> =
+        Rc::new(RefCell::new((DEFAULT_WIDTH, DEFAULT_HEIGHT)));
+    let window_state: Rc<RefCell<Option<WindowState>>> = Rc::new(RefCell::new(None));
 
     let context = Context::new(display, |request| match request {
         libdecor::Request::Error(error) => {
@@ -121,46 +239,6 @@ fn main() {
         }
         _ => unreachable!(),
     });
-
-    let frame = Rc::new(
-        context
-            .decorate(content_surface.detach(), {
-                let exit = exit.clone();
-                let shm = shm.clone();
-                let content_surface = content_surface.detach();
-                move |frame, request| match request {
-                    libdecor::FrameRequest::Configure(configuration) => {
-                        let (width, height) = if let Some(size) = configuration.content_size(&frame)
-                        {
-                            size
-                        } else {
-                            (floating_width, floating_height)
-                        };
-
-                        let window_state = configuration.window_state();
-
-                        let state = libdecor::State::new(width, height);
-                        frame.commit(&state, Some(&configuration));
-
-                        if frame.is_floating() {
-                            floating_width = width;
-                            floating_height = height;
-                        }
-
-                        redraw(&shm, &content_surface, width, height, window_state);
-                    }
-                    libdecor::FrameRequest::Close => {
-                        exit.store(true, Ordering::SeqCst);
-                    }
-                    libdecor::FrameRequest::Commit => {
-                        content_surface.commit();
-                    }
-                    libdecor::FrameRequest::DismissPopup { .. } => eprintln!("DismissPopup called"),
-                    _ => unreachable!(),
-                }
-            })
-            .expect("Failed to create frame"),
-    );
 
     let pointer: Rc<RefCell<Option<Main<wl_pointer::WlPointer>>>> = Rc::new(RefCell::new(None));
     let keyboard: Rc<RefCell<Option<Main<wl_keyboard::WlKeyboard>>>> = Rc::new(RefCell::new(None));
@@ -172,11 +250,11 @@ fn main() {
         let seat_name = seat_name.clone();
         move |seat, request, _| match request {
             wl_seat::Event::Capabilities { capabilities } => {
-                if capabilities.contains(Capability::Keyboard) {
+                if capabilities.contains(wl_seat::Capability::Keyboard) {
                     let mut keyboard = keyboard.borrow_mut();
                     (*keyboard) = Some(seat.get_keyboard());
                 }
-                if capabilities.contains(Capability::Pointer) {
+                if capabilities.contains(wl_seat::Capability::Pointer) {
                     let mut pointer = pointer.borrow_mut();
                     (*pointer) = Some(seat.get_pointer());
                 }
@@ -193,44 +271,92 @@ fn main() {
         .sync_roundtrip(&mut (), |_, _, _| unreachable!())
         .unwrap();
 
-    let mut cursor_theme = CursorTheme::load(24, &shm);
-    let cursor = cursor_theme
-        .get_cursor("left_ptr")
-        .expect("Cursor not provided by theme");
-    let cursor_buffer = &cursor[0];
-    let cursor_surface = compositor.create_surface();
-    let cursor_buffer_dimension = cursor_buffer.dimensions();
-    cursor_surface.quick_assign(|_, request, _| match request {
-        wl_surface::Event::Enter { .. } => {}
-        wl_surface::Event::Leave { .. } => {}
-        _ => unreachable!(),
-    });
+    let popup: Rc<RefCell<Option<Popup>>> = Rc::new(RefCell::new(None));
 
-    cursor_surface.attach(Some(cursor_buffer), 0, 0);
-    cursor_surface.set_buffer_scale(1);
-    cursor_surface.damage_buffer(
-        0,
-        0,
-        cursor_buffer_dimension.0 as i32,
-        cursor_buffer_dimension.1 as i32,
+    let frame = Rc::new(
+        context
+            .decorate(content_surface.detach(), {
+                let exit = exit.clone();
+                let shm = shm.clone();
+                let window_state = window_state.clone();
+                let content_surface = content_surface.detach();
+                let floating_size = floating_size.clone();
+                let configured_size = configured_size.clone();
+                let popup = popup.clone();
+                let seat_name = seat_name.clone();
+                move |frame, request| match request {
+                    libdecor::FrameRequest::Configure(configuration) => {
+                        let size = configuration
+                            .content_size(&frame)
+                            .unwrap_or_else(|| *floating_size.borrow());
+
+                        {
+                            let mut configured_size = configured_size.borrow_mut();
+                            *configured_size = size;
+                        }
+
+                        if let Some(state) = configuration.window_state() {
+                            let mut window_state = window_state.borrow_mut();
+                            *window_state = Some(state);
+                        }
+
+                        let state = libdecor::State::new(size.0, size.1);
+                        frame.commit(&state, Some(&configuration));
+
+                        if frame.is_floating() {
+                            let mut floating_size = floating_size.borrow_mut();
+                            *floating_size = size;
+                        }
+
+                        redraw(
+                            &shm,
+                            &content_surface,
+                            size.0,
+                            size.1,
+                            *window_state.borrow(),
+                        );
+                    }
+                    libdecor::FrameRequest::Close => {
+                        exit.store(true, Ordering::SeqCst);
+                    }
+                    libdecor::FrameRequest::Commit => {
+                        content_surface.commit();
+                    }
+                    libdecor::FrameRequest::DismissPopup { .. } => {
+                        if let Some(popup) = popup.borrow_mut().take() {
+                            frame.popup_ungrab(seat_name.borrow().as_ref().unwrap());
+                            popup.destroy();
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            })
+            .expect("Failed to create frame"),
     );
-    cursor_surface.commit();
 
     let has_pointer_focus = AtomicBool::new(false);
+    let mut pointer_position = (0, 0);
+    let cursor_surface = get_cursor_surface(&compositor, &shm);
 
     if let Some(pointer) = &*pointer.borrow() {
         pointer.quick_assign({
             let content_surface = content_surface.detach();
             let frame = frame.clone();
+            let shm = shm.clone();
             move |pointer, request, _| match request {
                 wl_pointer::Event::Enter {
-                    surface, serial, ..
+                    surface,
+                    serial,
+                    surface_x,
+                    surface_y,
                 } => {
                     if surface.as_ref() != content_surface.as_ref() {
                         return;
                     }
 
                     has_pointer_focus.store(true, Ordering::SeqCst);
+                    pointer_position = (surface_x as i32, surface_y as i32);
+
                     pointer.set_cursor(serial, Some(&cursor_surface), 0, 0);
                 }
                 wl_pointer::Event::Leave { surface, .. } => {
@@ -240,7 +366,13 @@ fn main() {
 
                     has_pointer_focus.store(false, Ordering::SeqCst);
                 }
-                wl_pointer::Event::Motion { .. } => {}
+                wl_pointer::Event::Motion {
+                    surface_x,
+                    surface_y,
+                    ..
+                } => {
+                    pointer_position = (surface_x as i32, surface_y as i32);
+                }
                 wl_pointer::Event::Button {
                     button,
                     state,
@@ -251,8 +383,85 @@ fn main() {
                         return;
                     }
 
-                    if button == 0x110 && state == ButtonState::Pressed {
-                        frame._move(&seat, serial)
+                    if state != wl_pointer::ButtonState::Pressed {
+                        return;
+                    }
+
+                    if let Some(popup) = popup.borrow_mut().take() {
+                        frame.popup_ungrab(seat_name.borrow().as_ref().unwrap());
+                        popup.destroy();
+                    }
+
+                    match button {
+                        BTN_LEFT => {
+                            frame._move(&seat, serial);
+                        }
+                        BTN_MIDDLE => {
+                            frame.show_window_menu(
+                                &seat,
+                                serial,
+                                pointer_position.0,
+                                pointer_position.1,
+                            );
+                        }
+                        BTN_RIGHT => {
+                            let popup_surface = compositor.create_surface();
+                            popup_surface.quick_assign(|_, _, _| {});
+                            let xdg_surface = xdg_wm_base.get_xdg_surface(&popup_surface);
+                            xdg_surface.quick_assign({
+                                let popup_surface = popup_surface.detach();
+                                let shm = shm.clone();
+                                move |xdg_surface, request, _| {
+                                match request {
+                                    wayland_protocols::xdg_shell::client::xdg_surface::Event::Configure { serial } => {
+                                        popup_configure(&shm, &popup_surface, &xdg_surface, POPUP_WIDTH, POPUP_HEIGHT, serial);
+                                    },
+                                    _ => unreachable!()
+                                }
+                            }});
+                            let parent = frame.xdg_surface().expect("Frame without xdg_surface");
+                            let positioner = xdg_wm_base.create_positioner();
+                            positioner.set_size(POPUP_WIDTH, POPUP_HEIGHT);
+                            let (x, y) =
+                                frame.translate_coordinate(pointer_position.0, pointer_position.1);
+                            positioner.set_anchor_rect(x, y, 1, 1);
+                            positioner.set_constraint_adjustment(
+                                (xdg_positioner::ConstraintAdjustment::FlipY
+                                    | xdg_positioner::ConstraintAdjustment::SlideX)
+                                    .to_raw(),
+                            );
+                            positioner.set_anchor(xdg_positioner::Anchor::BottomRight);
+                            positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+                            let xdg_popup = xdg_surface.get_popup(Some(&parent), &positioner);
+                            xdg_popup.quick_assign({
+                                let popup = popup.clone();
+                                let frame = frame.clone();
+                                let seat_name = seat_name.clone();
+                                move |_, request, _| {
+                                match request {
+                                    wayland_protocols::xdg_shell::client::xdg_popup::Event::Configure { .. } => {},
+                                    wayland_protocols::xdg_shell::client::xdg_popup::Event::PopupDone => {
+                                        if let Some(popup) = popup.borrow_mut().take() {
+                                            frame.popup_ungrab(seat_name.borrow().as_ref().unwrap());
+                                            popup.destroy();
+                                        }
+                                    },
+                                    wayland_protocols::xdg_shell::client::xdg_popup::Event::Repositioned { .. } => {},
+                                    _ => unreachable!(),
+                                }
+                            }});
+                            positioner.destroy();
+                            xdg_popup.grab(&seat, serial);
+                            popup_surface.commit();
+                            frame.popup_grab(seat_name.borrow().as_ref().unwrap());
+                            let mut popup = popup.borrow_mut();
+                            *popup = Some(Popup {
+                                surface: popup_surface.detach(),
+                                xdg_popup: xdg_popup.detach(),
+                                xdg_surface: xdg_surface.detach(),
+                            })
+                        }
+                        _ => {}
                     }
                 }
                 wl_pointer::Event::Axis { .. } => {}
@@ -265,15 +474,163 @@ fn main() {
         });
     }
 
+    let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+    let xkb_state: RefCell<Option<xkb::State>> = RefCell::new(None);
+    let title_index = AtomicUsize::new(0);
+
     if let Some(keyboard) = &*keyboard.borrow() {
-        keyboard.quick_assign(|_, request, _| match request {
-            wl_keyboard::Event::Keymap { .. } => {}
-            wl_keyboard::Event::Enter { .. } => {}
-            wl_keyboard::Event::Leave { .. } => {}
-            wl_keyboard::Event::Key { .. } => {}
-            wl_keyboard::Event::Modifiers { .. } => {}
-            wl_keyboard::Event::RepeatInfo { .. } => {}
-            _ => unreachable!(),
+        keyboard.quick_assign({
+            let frame = frame.clone();
+            move |_, request, _| match request {
+                wl_keyboard::Event::Keymap { format, fd, size } => match format {
+                    wl_keyboard::KeymapFormat::XkbV1 => {
+                        let mut fd = unsafe { File::from_raw_fd(fd) };
+                        let mut buffer = vec![0; (size as usize) - 1];
+                        fd.read_exact(&mut buffer).expect("Failed to read keymap");
+                        let keymap = String::from_utf8(buffer).expect("Failed to read keymap");
+                        let keymap = xkb::Keymap::new_from_string(
+                            &xkb_context,
+                            keymap,
+                            xkb::FORMAT_TEXT_V1,
+                            xkb::COMPILE_NO_FLAGS,
+                        );
+
+                        if let Some(keymap) = keymap {
+                            let mut xkb_state = xkb_state.borrow_mut();
+                            *xkb_state = Some(xkb::State::new(&keymap));
+                        }
+                    }
+                    wl_keyboard::KeymapFormat::NoKeymap => {
+                        panic!("NoKeymap not supported");
+                    }
+                    _ => unreachable!(),
+                },
+                wl_keyboard::Event::Enter { .. } => {}
+                wl_keyboard::Event::Leave { .. } => {}
+                wl_keyboard::Event::Key { key, state, .. } => {
+                    if state != wl_keyboard::KeyState::Pressed {
+                        return;
+                    }
+
+                    if let Some(xkb_state) = &*xkb_state.borrow() {
+                        let key_sym = xkb_state.key_get_syms(key + 8);
+
+                        match key_sym[0] {
+                            xkb::KEY_Escape => {
+                                frame.close();
+                            }
+                            xkb::KEY_1 => {
+                                if frame.has_capability(Capabilities::RESIZE) {
+                                    eprintln!("set fixed-size");
+                                    frame.unset_capabilities(Capabilities::RESIZE);
+                                } else {
+                                    eprintln!("set resizeable");
+                                    frame.set_capabilities(Capabilities::RESIZE);
+                                }
+                            }
+                            xkb::KEY_2 => {
+                                eprintln!("maximize");
+                                frame.set_maximized();
+                            }
+                            xkb::KEY_3 => {
+                                eprintln!("un-maximize");
+                                frame.unset_maximized();
+                            }
+                            xkb::KEY_4 => {
+                                eprintln!("fullscreen");
+                                frame.set_fullscreen(None);
+                            }
+                            xkb::KEY_5 => {
+                                eprintln!("un-fullscreen");
+                                frame.unset_fullscreen();
+                            }
+                            xkb::KEY_minus | xkb::KEY_plus => {
+                                let dd = CHK / 2;
+                                let dd = if key_sym[0] == xkb::KEY_minus {
+                                    dd * -1
+                                } else {
+                                    dd
+                                };
+                                let (width, height) = {
+                                    let (configured_width, configured_height) =
+                                        *configured_size.borrow();
+                                    (configured_width + dd, configured_height + dd)
+                                };
+                                eprintln!("resize to: {} x {}", width, height);
+                                resize(
+                                    &frame,
+                                    &shm,
+                                    &content_surface,
+                                    width,
+                                    height,
+                                    *window_state.borrow(),
+                                    &mut floating_size.borrow_mut(),
+                                    &mut configured_size.borrow_mut(),
+                                );
+                            }
+                            xkb::KEY_t => {
+                                let current_title_index = title_index.load(Ordering::SeqCst);
+                                frame.set_title(TITLES[current_title_index]);
+                                title_index.store(
+                                    (current_title_index + 1) % TITLES.len(),
+                                    Ordering::SeqCst,
+                                );
+                            }
+                            xkb::KEY_v => {
+                                eprintln!("set VGA resolution: 640x480");
+                                resize(
+                                    &frame,
+                                    &shm,
+                                    &content_surface,
+                                    640,
+                                    480,
+                                    *window_state.borrow(),
+                                    &mut floating_size.borrow_mut(),
+                                    &mut configured_size.borrow_mut(),
+                                );
+                            }
+                            xkb::KEY_s => {
+                                eprintln!("set SVGA resolution: 800x600");
+                                resize(
+                                    &frame,
+                                    &shm,
+                                    &content_surface,
+                                    800,
+                                    600,
+                                    *window_state.borrow(),
+                                    &mut floating_size.borrow_mut(),
+                                    &mut configured_size.borrow_mut(),
+                                );
+                            }
+                            xkb::KEY_x => {
+                                eprintln!("set XVGA resolution: 1024x768");
+                                resize(
+                                    &frame,
+                                    &shm,
+                                    &content_surface,
+                                    1024,
+                                    768,
+                                    *window_state.borrow(),
+                                    &mut floating_size.borrow_mut(),
+                                    &mut configured_size.borrow_mut(),
+                                );
+                            }
+                            xkb::KEY_h => {
+                                frame.set_visibility(!frame.is_visible());
+                                if frame.is_visible() {
+                                    eprintln!("decorations visible");
+                                } else {
+                                    eprintln!("decorations hidden");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                wl_keyboard::Event::Modifiers { .. } => {}
+                wl_keyboard::Event::RepeatInfo { .. } => {}
+                _ => unreachable!(),
+            }
         })
     }
 
