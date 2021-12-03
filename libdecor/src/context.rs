@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     cell::RefCell,
     ffi::CStr,
     os::{
@@ -8,7 +9,7 @@ use std::{
     rc::Rc,
     time::Duration,
 };
-use wayland_client::{protocol::wl_surface::WlSurface, Display};
+use wayland_client::{protocol::wl_surface::WlSurface, DispatchData, Display};
 
 use crate::{frame::LIBDECOR_FRAME_INTERFACE, FrameCallback, FrameRef};
 use libdecor_sys::*;
@@ -183,7 +184,7 @@ impl Context {
     /// without any window decoration.
     pub fn decorate<C>(&self, surface: WlSurface, cb: C) -> Option<Frame>
     where
-        C: FnMut(FrameRef, FrameRequest) + 'static,
+        C: FnMut(FrameRef, FrameRequest, DispatchData) + 'static,
     {
         let cb: Box<Box<FrameCallback>> = Box::new(Box::new(cb));
         let cb = Box::into_raw(cb);
@@ -205,7 +206,7 @@ impl Context {
             Some(Frame {
                 frame_ref: FrameRef(frame),
                 cb,
-                context: self.clone(),
+                _context: self.clone(),
             })
         }
     }
@@ -220,16 +221,21 @@ impl Context {
     /// Dispatch events. This function should be called when data is available on
     /// the file descriptor returned by [`fd`](#method.fd). If timeout is [`None`], this
     /// function will never block.
-    pub fn dispatch(&self, timeout: Option<Duration>) -> bool {
-        let result = unsafe {
-            ffi_dispatch!(
-                LIBDECOR_HANDLE,
-                libdecor_dispatch,
-                self.inner.0,
-                timeout.map(|t| t.as_millis() as c_int).unwrap_or(-1)
-            )
-        };
+    pub fn dispatch<T: Any>(&self, ddata: &mut T, timeout: Option<Duration>) -> bool {
+        let ddata = unsafe { std::mem::transmute(ddata) };
+        let ddata = DispatchData::wrap::<T>(ddata);
+        let ddata_mut = crate::DispatchDataMut::new(ddata);
+        crate::DISPATCH_METADATA.set(&ddata_mut, || {
+            let result = unsafe {
+                ffi_dispatch!(
+                    LIBDECOR_HANDLE,
+                    libdecor_dispatch,
+                    self.inner.0,
+                    timeout.map(|t| t.as_millis() as c_int).unwrap_or(-1)
+                )
+            };
 
-        result >= 0
+            result >= 0
+        })
     }
 }

@@ -1,9 +1,9 @@
 use std::{
-    borrow::Borrow,
+    any::Any,
     ffi::{c_void, CStr, CString},
-    ops::Deref,
     os::raw::c_char,
 };
+use wayland_client::DispatchData;
 use wayland_protocols::xdg_shell::client::{xdg_surface, xdg_toplevel};
 
 use libdecor_sys::*;
@@ -76,7 +76,7 @@ impl From<ResizeEdge> for libdecor_resize_edge {
     }
 }
 
-pub(crate) type FrameCallback = dyn FnMut(FrameRef, FrameRequest);
+pub(crate) type FrameCallback = dyn FnMut(FrameRef, FrameRequest, DispatchData);
 
 /// An object representing a toplevel window configuration.
 #[derive(Debug)]
@@ -156,9 +156,12 @@ fn invoke_frame_callback(
     user_data: *mut c_void,
     request: FrameRequest,
 ) {
+    assert!(crate::DISPATCH_METADATA.is_set());
+
     let callback = unsafe { &mut *(user_data as *mut std::boxed::Box<FrameCallback>) };
     let frame_ref = FrameRef(frame);
-    callback(frame_ref, request)
+
+    crate::DISPATCH_METADATA.with(|ddata| callback(frame_ref, request, ddata.get().reborrow()));
 }
 
 extern "C" fn configure_callback_trampolin(
@@ -606,32 +609,25 @@ impl FrameRef {
 pub struct Frame {
     pub(crate) frame_ref: FrameRef,
     pub(crate) cb: *mut Box<FrameCallback>,
-    pub(crate) context: crate::Context,
+    pub(crate) _context: crate::Context,
 }
 
-impl Deref for Frame {
-    type Target = FrameRef;
-
-    fn deref(&self) -> &Self::Target {
-        &self.frame_ref
-    }
-}
-
-impl AsRef<FrameRef> for Frame {
-    fn as_ref(&self) -> &FrameRef {
-        &**self
-    }
-}
-
-impl Borrow<FrameRef> for Frame {
-    fn borrow(&self) -> &FrameRef {
-        &**self
+impl Frame {
+    pub fn dispatch<T, F, R>(&self, ddata: &mut T, f: F) -> R
+    where
+        T: Any,
+        F: FnOnce(&FrameRef) -> R,
+    {
+        let ddata = unsafe { std::mem::transmute(ddata) };
+        let ddata = DispatchData::wrap::<T>(ddata);
+        let ddata_mut = crate::DispatchDataMut::new(ddata);
+        crate::DISPATCH_METADATA.set(&ddata_mut, || f(&self.frame_ref))
     }
 }
 
 impl Drop for Frame {
     fn drop(&mut self) {
-        unsafe { ffi_dispatch!(LIBDECOR_HANDLE, libdecor_frame_unref, self.0) }
+        unsafe { ffi_dispatch!(LIBDECOR_HANDLE, libdecor_frame_unref, self.frame_ref.0) }
         let _ = unsafe { Box::from_raw(self.cb) };
     }
 }
