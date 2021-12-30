@@ -11,7 +11,7 @@ use std::{
 use libdecor::{Capabilities, Context, FrameRef, State, WindowState};
 use wayland_client::{
     protocol::{wl_compositor, wl_keyboard, wl_pointer, wl_seat, wl_shm, wl_surface},
-    Attached, Display, GlobalManager, Main,
+    Display, GlobalManager, Main,
 };
 use wayland_cursor::CursorTheme;
 use wayland_protocols::xdg_shell::client::{xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
@@ -188,31 +188,6 @@ fn resize(
     true
 }
 
-fn get_cursor_surface(
-    compositor: &wl_compositor::WlCompositor,
-    shm: &Attached<wl_shm::WlShm>,
-) -> wl_surface::WlSurface {
-    let mut cursor_theme = CursorTheme::load(24, shm);
-    let cursor = cursor_theme
-        .get_cursor("left_ptr")
-        .expect("Cursor not provided by theme");
-    let cursor_buffer = &cursor[0];
-    let cursor_surface = compositor.create_surface();
-    let cursor_buffer_dimension = cursor_buffer.dimensions();
-    cursor_surface.quick_assign(|_, _, _| {});
-
-    cursor_surface.attach(Some(cursor_buffer), 0, 0);
-    cursor_surface.set_buffer_scale(1);
-    cursor_surface.damage_buffer(
-        0,
-        0,
-        cursor_buffer_dimension.0 as i32,
-        cursor_buffer_dimension.1 as i32,
-    );
-    cursor_surface.commit();
-    cursor_surface.detach()
-}
-
 fn main() {
     let display = Display::connect_to_env().unwrap();
     let mut event_queue = display.create_event_queue();
@@ -345,7 +320,14 @@ fn main() {
         f.set_title("libdecor-rs demo");
     });
 
-    let cursor_surface = get_cursor_surface(&compositor, &shm);
+    let mut cursor_theme = CursorTheme::load(24, &shm);
+    let cursor = cursor_theme
+        .get_cursor("left_ptr")
+        .expect("Cursor not provided by theme");
+    let cursor_buffer = cursor[0].clone();
+    let cursor_surface = compositor.create_surface();
+    let cursor_buffer_dimension = cursor_buffer.dimensions();
+    cursor_surface.quick_assign(|_, _, _| {});
 
     if let Some(pointer) = &*pointer.borrow() {
         pointer.quick_assign({
@@ -367,7 +349,17 @@ fn main() {
 
                     demo_state.window.has_pointer_focus.store(true, Ordering::SeqCst);
                     demo_state.window.pointer_position = (surface_x as i32, surface_y as i32);
+
                     pointer.set_cursor(serial, Some(&cursor_surface), 0, 0);
+                    cursor_surface.attach(Some(&cursor_buffer), 0, 0);
+                    cursor_surface.set_buffer_scale(1);
+                    cursor_surface.damage_buffer(
+                        0,
+                        0,
+                        cursor_buffer_dimension.0 as i32,
+                        cursor_buffer_dimension.1 as i32,
+                    );
+                    cursor_surface.commit();
                 }
                 wl_pointer::Event::Leave { surface, .. } => {
                     if surface.as_ref() != demo_state.window.content_surface.as_ref() {
