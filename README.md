@@ -6,7 +6,7 @@
 > decorations for them. It aims to provide multiple backends that implements the
 > decoration drawing.
 
-## Dependecies
+## Dependencies
 
 Required:
 
