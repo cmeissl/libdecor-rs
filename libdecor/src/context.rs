@@ -106,6 +106,7 @@ thread_local! {
     static LIBDECOR_CALLBACK_REGISTRATIONS: RefCell<Vec<ContextCallbackRegistration>> = RefCell::new(Vec::new());
 }
 
+/// Possible variants for the [`Context`] callback
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Request {
@@ -184,7 +185,7 @@ impl Context {
     /// without any window decoration.
     pub fn decorate<C>(&self, surface: WlSurface, cb: C) -> Option<Frame>
     where
-        C: FnMut(FrameRef, FrameRequest, DispatchData) + 'static,
+        C: FnMut(&FrameRef, &FrameRequest, DispatchData) + 'static,
     {
         let cb: Box<Box<FrameCallback>> = Box::new(Box::new(cb));
         let cb = Box::into_raw(cb);
