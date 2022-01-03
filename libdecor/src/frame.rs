@@ -11,35 +11,57 @@ use libdecor_sys::*;
 bitflags::bitflags! {
     /// The possible window states
     pub struct WindowState: libdecor_window_state {
+        /// The window is active
         const ACTIVE = LIBDECOR_WINDOW_STATE_ACTIVE;
+        /// The window is maximized
         const MAXIMIZED = LIBDECOR_WINDOW_STATE_MAXIMIZED;
+        /// The window is running in fullscreen mode
         const FULLSCREEN = LIBDECOR_WINDOW_STATE_FULLSCREEN;
+        /// Tiled left
         const TILED_LEFT = LIBDECOR_WINDOW_STATE_TILED_LEFT;
+        /// Tiled right
         const TILED_RIGHT = LIBDECOR_WINDOW_STATE_TILED_RIGHT;
+        /// Tiled top
         const TILED_TOP = LIBDECOR_WINDOW_STATE_TILED_TOP;
+        /// Tiled bottom
         const TILED_BOTTOM = LIBDECOR_WINDOW_STATE_TILED_BOTTOM;
     }
 
     /// Capabilities of a [`Frame`]
     pub struct Capabilities: libdecor_capabilities {
+        /// Move enabled/disabled
         const MOVE = LIBDECOR_ACTION_MOVE;
+        /// Resize enabled/disabled
         const RESIZE = LIBDECOR_ACTION_RESIZE;
+        /// Minimize enabled/disabled
         const MINIMIZE = LIBDECOR_ACTION_MINIMIZE;
+        /// Fullscreen enabled/disabled
         const FULLSCREEN = LIBDECOR_ACTION_FULLSCREEN;
+        /// Close enabled/disabled
         const CLOSE = LIBDECOR_ACTION_CLOSE;
     }
 }
 
+/// Defines the edge for an interactive [`FrameRef::resize`]
 #[derive(Debug)]
 pub enum ResizeEdge {
+    /// No edge
     None,
+    /// Top of the window
     Top,
+    /// Bottom of the window
     Bottom,
+    /// Left side of the window
     Left,
+    /// Top left corner of the window
     TopLeft,
+    /// Bottom left corner of the window
     BottomLeft,
+    /// Right side of the window
     Right,
+    /// Top right corner of the window
     TopRight,
+    /// Bottom right corner of the window
     BottomRight,
 }
 
@@ -76,7 +98,7 @@ impl From<ResizeEdge> for libdecor_resize_edge {
     }
 }
 
-pub(crate) type FrameCallback = dyn FnMut(FrameRef, FrameRequest, DispatchData);
+pub(crate) type FrameCallback = dyn FnMut(&FrameRef, &FrameRequest, DispatchData);
 
 /// An object representing a toplevel window configuration.
 #[derive(Debug)]
@@ -161,7 +183,7 @@ fn invoke_frame_callback(
     let callback = unsafe { &mut *(user_data as *mut std::boxed::Box<FrameCallback>) };
     let frame_ref = FrameRef(frame);
 
-    crate::DISPATCH_METADATA.with(|ddata| callback(frame_ref, request, ddata.get().reborrow()));
+    crate::DISPATCH_METADATA.with(|ddata| callback(&frame_ref, &request, ddata.get().reborrow()));
 }
 
 extern "C" fn configure_callback_trampolin(
@@ -200,6 +222,7 @@ extern "C" fn dismiss_popup_callback_trampolin(
     )
 }
 
+/// Possible variants for the [`Frame`] callback
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameRequest {
@@ -215,7 +238,10 @@ pub enum FrameRequest {
     Commit,
     /// Any mapped popup that has a grab on the given seat should be
     /// dismissed.
-    DismissPopup { seat_name: String },
+    DismissPopup {
+        /// The name of the seat
+        seat_name: String,
+    },
 }
 
 pub(crate) static LIBDECOR_FRAME_INTERFACE: libdecor_frame_interface = libdecor_frame_interface {
@@ -613,6 +639,10 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Dispatch a call to a [`FrameRef`]
+    ///
+    /// This is necessary because invoking a method on the [`FrameRef`] can invoke
+    /// the callback synchronously which needs access to the dispatch data.
     pub fn dispatch<T, F, R>(&self, ddata: &mut T, f: F) -> R
     where
         T: Any,

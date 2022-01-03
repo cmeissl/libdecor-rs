@@ -282,7 +282,7 @@ fn main() {
                             }
 
                             let state = libdecor::State::new(size.0, size.1);
-                            frame.commit(&state, Some(&configuration));
+                            frame.commit(&state, Some(configuration));
 
                             if frame.is_floating() {
                                 demo_state.window.floating_size = size;
