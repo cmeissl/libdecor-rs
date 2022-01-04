@@ -7,9 +7,9 @@
 //! > decoration drawing.
 //!
 //! # Usage
-//! 
+//!
 //! ## Create a context
-//! 
+//!
 //! ```
 //! # use libdecor::{Context, State, Request, FrameRequest};
 //! # use wayland_client::Display;
@@ -20,19 +20,19 @@
 //! # event_queue
 //! #     .sync_roundtrip(&mut (), |_, _, _| unreachable!())
 //! #     .unwrap();
-//! # 
+//! #
 //! let context = Context::new(display, |request| match request {
 //!     Request::Error(error) => {
 //!         panic!("libdecor error: {}", error);
 //!     }
 //!     _ => unreachable!(),
 //! });
-//! # 
+//! #
 //! # context.dispatch(&mut (), None);
 //! ```
 //!
 //! ## Decorate a surface
-//! 
+//!
 //! ```
 //! # use libdecor::{Context, State, Request, FrameRequest};
 //! # use wayland_client::{
@@ -47,11 +47,11 @@
 //! # event_queue
 //! #     .sync_roundtrip(&mut (), |_, _, _| unreachable!())
 //! #     .unwrap();
-//! # 
+//! #
 //! # let compositor = globals
 //! #     .instantiate_exact::<wl_compositor::WlCompositor>(4)
 //! #     .expect("Failed to instantiate wl_compositor");
-//! # 
+//! #
 //! # let content_surface = compositor.create_surface();
 //! # content_surface.quick_assign(|_, _, _| {});
 //! #
@@ -61,7 +61,7 @@
 //! #     }
 //! #     _ => unreachable!(),
 //! # });
-//! # 
+//! #
 //! let frame = context
 //!     .decorate(content_surface.detach(), move |frame, request, _| {
 //!         match request {
@@ -97,9 +97,9 @@
 //! #     .dispatch(&mut (), |_, _, _| unreachable!())
 //! #     .unwrap();
 //! ```
-//! 
+//!
 //! # Example
-//! 
+//!
 //! For a more complete example see [demo.rs](https://github.com/cmeissl/libdecor-rs/blob/main/libdecor/examples/demo.rs)
 //!
 //! ```
@@ -245,10 +245,10 @@ impl<'a> Drop for DispatchDataMut<'a> {
 }
 
 /// Check if the `libdecor` library is available on the system.
-/// 
+///
 /// This can be used in combination with the `dlopen` feature
 /// to check at runtime if the library is available.
-/// 
+///
 /// Always returns [`true`] if the feature `dlopen` is not enabled.
 pub fn is_lib_available() -> bool {
     ffi::is_lib_available()
