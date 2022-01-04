@@ -27,7 +27,7 @@ const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const BTN_MIDDLE: u32 = 0x112;
 
-static TITLES: &'static [&'static str] = &[
+static TITLES: &[&str] = &[
     "Hello!",
     "Hallå!",
     "Привет!",
@@ -183,7 +183,7 @@ fn resize(
     let state = State::new(width, height);
     frame.commit(&state, None);
 
-    redraw(&shm, &surface, width, height, window_state);
+    redraw(shm, surface, width, height, window_state);
 
     true
 }
@@ -212,7 +212,7 @@ fn main() {
         window: Window {
             configured_size: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
             floating_size: (DEFAULT_WIDTH, DEFAULT_HEIGHT),
-            content_surface: content_surface,
+            content_surface,
             window_state: None,
             has_pointer_focus: AtomicBool::new(false),
             pointer_position: (0, 0),
@@ -273,7 +273,7 @@ fn main() {
                     match request {
                         libdecor::FrameRequest::Configure(configuration) => {
                             let size = configuration
-                                .content_size(&frame)
+                                .content_size(frame)
                                 .unwrap_or(demo_state.window.floating_size);
                             demo_state.window.configured_size = size;
 
@@ -545,9 +545,11 @@ fn main() {
                                     frame.dispatch(demo_state, |f| f.close());
                                 }
                                 xkb::KEY_1 => {
-                                    if frame.dispatch(demo_state, |f| {
+                                    let resize_enabled = frame.dispatch(demo_state, |f| {
                                         f.has_capability(Capabilities::RESIZE)
-                                    }) {
+                                    });
+
+                                    if resize_enabled {
                                         eprintln!("set fixed-size");
                                         frame.dispatch(demo_state, |f| {
                                             f.unset_capabilities(Capabilities::RESIZE);
@@ -586,7 +588,7 @@ fn main() {
                                 xkb::KEY_minus | xkb::KEY_plus => {
                                     let dd = CHK / 2;
                                     let dd = if key_sym[0] == xkb::KEY_minus {
-                                        dd * -1
+                                        -dd
                                     } else {
                                         dd
                                     };
@@ -596,9 +598,9 @@ fn main() {
                                         (configured_width + dd, configured_height + dd)
                                     };
                                     eprintln!("resize to: {} x {}", width, height);
-                                    if frame.dispatch(demo_state, {
+                                    let resized = frame.dispatch(demo_state, {
                                         let shm = shm.clone();
-                                        let window_state = demo_state.window.window_state.clone();
+                                        let window_state = demo_state.window.window_state;
                                         let content_surface =
                                             demo_state.window.content_surface.clone();
                                         move |d| {
@@ -611,7 +613,8 @@ fn main() {
                                                 window_state,
                                             )
                                         }
-                                    }) {
+                                    });
+                                    if resized {
                                         demo_state.window.floating_size = (width, height);
                                         demo_state.window.configured_size = (width, height);
                                     }
@@ -631,9 +634,9 @@ fn main() {
                                 xkb::KEY_v => {
                                     eprintln!("set VGA resolution: 640x480");
                                     let size = (640, 480);
-                                    if frame.dispatch(demo_state, {
+                                    let resized = frame.dispatch(demo_state, {
                                         let shm = shm.clone();
-                                        let window_state = demo_state.window.window_state.clone();
+                                        let window_state = demo_state.window.window_state;
                                         let content_surface =
                                             demo_state.window.content_surface.clone();
                                         move |d| {
@@ -646,7 +649,8 @@ fn main() {
                                                 window_state,
                                             )
                                         }
-                                    }) {
+                                    });
+                                    if resized {
                                         demo_state.window.floating_size = size;
                                         demo_state.window.configured_size = size;
                                     }
@@ -654,9 +658,9 @@ fn main() {
                                 xkb::KEY_s => {
                                     eprintln!("set SVGA resolution: 800x600");
                                     let size = (800, 600);
-                                    if frame.dispatch(demo_state, {
+                                    let resized = frame.dispatch(demo_state, {
                                         let shm = shm.clone();
-                                        let window_state = demo_state.window.window_state.clone();
+                                        let window_state = demo_state.window.window_state;
                                         let content_surface =
                                             demo_state.window.content_surface.clone();
                                         move |d| {
@@ -669,7 +673,8 @@ fn main() {
                                                 window_state,
                                             )
                                         }
-                                    }) {
+                                    });
+                                    if resized {
                                         demo_state.window.floating_size = size;
                                         demo_state.window.configured_size = size;
                                     }
@@ -677,9 +682,9 @@ fn main() {
                                 xkb::KEY_x => {
                                     eprintln!("set XVGA resolution: 1024x768");
                                     let size = (1024, 768);
-                                    if frame.dispatch(demo_state, {
+                                    let resized = frame.dispatch(demo_state, {
                                         let shm = shm.clone();
-                                        let window_state = demo_state.window.window_state.clone();
+                                        let window_state = demo_state.window.window_state;
                                         let content_surface =
                                             demo_state.window.content_surface.clone();
                                         move |d| {
@@ -692,7 +697,8 @@ fn main() {
                                                 window_state,
                                             )
                                         }
-                                    }) {
+                                    });
+                                    if resized {
                                         demo_state.window.floating_size = size;
                                         demo_state.window.configured_size = size;
                                     }
