@@ -65,7 +65,7 @@ jobs:
           path: target
           key: ${{ runner.os }}-build-rust_stable-check-${{ hashFiles('**/Cargo.toml') }}
       - name: System dependencies
-        run: sudo apt-get install libdecoration0-dev libwayland-dev
+        run: sudo add-apt-repository ppa:christianrauch/libdecoration; sudo apt-get update; sudo apt-get install libdecor-0-dev libwayland-dev
       - name: Clippy
         uses: actions-rs/clippy-check@v1
         with:
@@ -97,7 +97,7 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-rust_nightly-${{ hashFiles('**/Cargo.toml') }}
       - name: System dependencies
-        run: sudo apt-get install libdecoration0-dev libwayland-dev
+        run: sudo add-apt-repository ppa:christianrauch/libdecoration; sudo apt-get update; sudo apt-get install libdecor-0-dev libwayland-dev
       - name: Downgrade to minimal dependencies
         uses: actions-rs/cargo@v1
         with:
@@ -109,7 +109,7 @@ jobs:
           command: check
           args: --all
 
-  tests:
+  test:
     needs:
       - format
       - clippy-check
@@ -143,7 +143,7 @@ jobs:
           default: true
           profile: minimal      
       - name: System dependencies
-        run: sudo apt-get update; sudo apt-get install libdecoration0-dev libwayland-dev
+        run: sudo add-apt-repository ppa:christianrauch/libdecoration; sudo apt-get update; sudo apt-get install libdecor-0-dev libwayland-dev libxkbcommon-dev
       - name: Build cache
         uses: actions/cache@v2
         with:

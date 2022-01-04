@@ -10,7 +10,7 @@
 //!
 //! ## Create a context
 //!
-//! ```
+//! ```no_run
 //! # use libdecor::{Context, State, Request, FrameRequest};
 //! # use wayland_client::Display;
 //! #
@@ -33,7 +33,7 @@
 //!
 //! ## Decorate a surface
 //!
-//! ```
+//! ```no_run
 //! # use libdecor::{Context, State, Request, FrameRequest};
 //! # use wayland_client::{
 //! #     protocol::wl_compositor,
@@ -102,7 +102,7 @@
 //!
 //! For a more complete example see [demo.rs](https://github.com/cmeissl/libdecor-rs/blob/main/libdecor/examples/demo.rs)
 //!
-//! ```
+//! ```no_run
 //! use std::{
 //!     time::Duration,
 //!     io::{BufWriter, Write},

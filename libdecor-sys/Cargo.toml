@@ -18,6 +18,7 @@ libloading = {version = "0.7", optional = true}
 pkg-config = "0.3"
 
 [features]
+default = []
 dlopen = ["lazy_static", "libloading"]
 
 [package.metadata.docs.rs]

@@ -22,6 +22,7 @@ wayland-cursor = "0.29"
 xkbcommon = "0.4"
 
 [features]
+default = []
 dlopen = ["libdecor-sys/dlopen"]
 
 [package.metadata.docs.rs]
