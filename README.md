@@ -6,16 +6,19 @@
 > decorations for them. It aims to provide multiple backends that implements the
 > decoration drawing.
 
+Documentation for the main branch can be found [here](https://cmeissl.github.io/libdecor-rs)
+
 ## Dependencies
 
 Required:
 
 - `libdecor`
+- `libwayland-client`
 
 Install via dnf
 
 ```sh
-sudo dnf install libdecor
+sudo dnf install libdecor libwayland-client
 ```
 
 ## Building
